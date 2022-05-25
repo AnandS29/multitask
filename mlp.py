@@ -17,13 +17,13 @@ class MLP(nn.Module):
   def __init__(self):
     super().__init__()
     self.layers = nn.Sequential(
-      nn.Linear(2, 2),
+      nn.Linear(2, 5),
       nn.ReLU(),
-      nn.Linear(2, 2),
+      nn.Linear(5, 5),
       nn.ReLU(),
-      nn.Linear(2, 2),
+      nn.Linear(5, 5),
       nn.ReLU(),
-      nn.Linear(2, 1)
+      nn.Linear(5, 1)
     )
 
 
