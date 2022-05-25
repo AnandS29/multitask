@@ -7,8 +7,10 @@ from stable_baselines3.common.env_util import make_vec_env
 import torch
 from torch import nn
 from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 import matplotlib.pyplot as plt
+from pylab import figure, cm
 
 from feedback_env import *
 from mlp import MLP
@@ -20,9 +22,16 @@ def create_comparison_fn(f, g, sigma_f=0.1, sigma_g=0.5, seed=None):
     np.random.seed(seed)
     def comparison_fn(x, y):
         eps_f, eps_g = np.random.normal(0, sigma_f, size=(1,)), np.random.normal(0, sigma_g, size=(1,))
-        r_fn = lambda x: f(x) + eps_f + g(x) + eps_g
+        r_fn = lambda z: f(z) + eps_f + g(z) + eps_g
         return r_fn(x) >= r_fn(y)
     return comparison_fn
+
+def create_reward_fn(f, g, sigma_f=0.1, sigma_g=0.5, seed=None):
+    np.random.seed(seed)
+    def reward_fn(x):
+        eps_f, eps_g = np.random.normal(0, sigma_f, size=(1,)), np.random.normal(0, sigma_g, size=(1,))
+        return (f(x) + eps_f + g(x) + eps_g)[0]
+    return reward_fn
 
 # Create comparison dataset from sampled actions
 def create_comparisons(actions, comparison_fn):
@@ -62,10 +71,14 @@ def train_policy(r_fn, policy_cfg):
 
     timesteps = policy_cfg["timesteps"]
     algo = policy_cfg["algo"]
+    
 
     print("Learning with PPO")
     env = make_vec_env("FeedbackEnv-v0", n_envs=1)
-    model = PPO("MlpPolicy", env, verbose=verbose)
+    if policy_cfg["log"]:
+        model = PPO("MlpPolicy", env, verbose=verbose, tensorboard_log="./log/policy/"+policy_cfg["log"]+"/")
+    else:
+        model = PPO("MlpPolicy", env, verbose=verbose)
     model.learn(total_timesteps=timesteps)
     # model.save("ppo_fb")
 
@@ -95,20 +108,27 @@ def learn_reward(sample, comparison_fn, reward_cfg):
     verbose = reward_cfg['verbose']
     print_freq = reward_cfg['print_freq']
     batch_size = reward_cfg['batch_size']
+    split = reward_cfg['split']
+
+    if reward_cfg['log']:
+        writer = SummaryWriter('./log/reward/'+reward_cfg['log'])
 
     _, actions = sample(n_sample)
     
     # Generate comparisons dataset
     comparisons_dataset = create_comparisons(actions, comparison_fn)
-    trainloader = torch.utils.data.DataLoader(comparisons_dataset, batch_size=1, shuffle=True)
+    train_set, val_set = torch.utils.data.random_split(comparisons_dataset, [int(split*len(comparisons_dataset)), len(comparisons_dataset)-int(split*len(comparisons_dataset))])
+    trainloader = torch.utils.data.DataLoader(train_set, batch_size=1, shuffle=True)
+    validationloader = torch.utils.data.DataLoader(val_set, batch_size=1, shuffle=True)
 
     # Create NN
     mlp = MLP()
     loss_function = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(mlp.parameters(), lr=lr)
 
+    running_loss = 0.0
     # Run the training loop
-    for epoch in range(0, n_epoch): # 5 epochs at maximum
+    for epoch in range(0, n_epoch):
         if verbose: print(f'Starting epoch {epoch+1}')
         current_loss = 0.0
         for i, data in enumerate(trainloader, 0):
@@ -119,19 +139,36 @@ def learn_reward(sample, comparison_fn, reward_cfg):
             loss.backward()
             optimizer.step()
             
-            # Print statistics
-            current_loss += loss.item()
-            if verbose and i % print_freq == print_freq-1:
-                print('Loss after mini-batch %5d: %.3f' %
-                    (i + 1, current_loss / print_freq), end= ", ")
-                current_loss = 0.0
+            running_vloss = 0.0
+
+            mlp.train(False) # Don't need to track gradents for validation
+            for j, vdata in enumerate(validationloader, 0):
+                vinputs, vlabels = vdata
+                voutputs = mlp(vinputs)
+                vloss = loss_function(voutputs, vlabels)
+                running_vloss += vloss.item()
+            mlp.train(True) # Turn gradients back on for training
+
+            avg_loss = running_loss / 1000
+            avg_vloss = running_vloss / len(validationloader)
+
+            # Log the running loss averaged per batch
+            if reward_cfg['log']:
+                writer.add_scalars('Training vs. Validation Loss',
+                                { 'Training' : avg_loss, 'Validation' : avg_vloss },
+                                epoch * len(trainloader) + i)
+                writer.flush()
+            if verbose:
+                print(f'Epoch {epoch+1} [{i+1}/{len(trainloader)}]\tTrain Loss: {avg_loss:.4f} \tVal Loss: {avg_vloss:.4f}')
+
+            running_loss = 0.0
 
     # Process is complete.
     if verbose: print('Training process has finished.')
 
     # Minimize loss
 
-    return lambda x: mlp(torch.tensor(x)).detach().numpy()[0]
+    return lambda x: mlp(torch.tensor([x])).detach().numpy()[0,0]
 
 ## Visualization
 
@@ -145,3 +182,12 @@ def plot_sampler(sample, title, n=100):
     plt.scatter(x, y)
     plt.show()
     print(np.average(actions,axis=0),np.std(actions,axis=0))
+
+def visualize_fn(f, title, x_range=[-10,10], y_range=[-10,10], x_step=0.1, y_step=0.1):
+    xs = np.arange(x_range[0], x_range[1], x_step)
+    ys = np.arange(y_range[0], y_range[1], y_step)
+    z = np.array([[f([float(x),float(y)]) for x in xs] for y in ys])
+    plt.imshow(z, extent=[x_range[0],x_range[1],y_range[0], y_range[1]], cmap=cm.jet, origin='lower')
+    plt.colorbar()
+    plt.title(title)
+    plt.show()
