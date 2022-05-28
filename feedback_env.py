@@ -11,9 +11,9 @@ from torch.utils.data import TensorDataset, DataLoader
 import matplotlib.pyplot as plt
 
 class FeedbackEnv(gym.Env):
-    def __init__(self, reward_fn):
+    def __init__(self, reward_fn, action_dim):
         super(FeedbackEnv, self).__init__()
-        self.action_space = gym.spaces.Box(low=-10, high=10, shape=(2,))
+        self.action_space = gym.spaces.Box(low=-10, high=10, shape=(action_dim,))
         self.observation_space = gym.spaces.Box(low=0, high=0, shape=(1,), dtype=np.uint8) # No obs
         self.reward_fn = reward_fn
 
@@ -33,10 +33,13 @@ class FeedbackEnv(gym.Env):
     # def close (self):
     #     ...
 
-def register_fb_env(r_fn):
+def register_fb_env(r_fn, action_dim):
     gym.envs.register(
         id='FeedbackEnv-v0',
         entry_point='__main__:FeedbackEnv',
         max_episode_steps=150,
-        kwargs={'reward_fn' : r_fn},
+        kwargs={
+            'reward_fn' : r_fn,
+            'action_dim' : action_dim
+        }
     )

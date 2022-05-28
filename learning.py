@@ -1,3 +1,4 @@
+from cProfile import label
 from logging import raiseExceptions
 import gym
 import numpy as np
@@ -16,6 +17,9 @@ from pylab import figure, cm
 from feedback_env import *
 from mlp import MLP
 
+import warnings
+warnings.filterwarnings('ignore', '.*Overriding environment.*', )
+
 ## Helpers
 
 # Create noisy comparison function from reward function
@@ -24,7 +28,7 @@ def create_comparison_fn(f, g, sigma_f=0.1, sigma_g=0.5, seed=None):
     def comparison_fn(x, y):
         eps_f, eps_g = np.random.normal(0, sigma_f, size=(1,)), np.random.normal(0, sigma_g, size=(1,))
         r_fn = lambda z: f(z) + eps_f + g(z) + eps_g
-        return r_fn(x) > r_fn(y)
+        return r_fn(x)[0] > r_fn(y)[0]
     return comparison_fn
 
 def create_reward_fn(f, g, sigma_f=0.1, sigma_g=0.5, seed=None):
@@ -34,7 +38,31 @@ def create_reward_fn(f, g, sigma_f=0.1, sigma_g=0.5, seed=None):
         return (f(x) + eps_f + g(x) + eps_g)[0]
     return reward_fn
 
-# Create comparison dataset from sampled actions
+# 1D Version
+def create_comparison_fn_1(f, noise, seed=None):
+    def comparison_fn(x, y):
+        r_fn = lambda z: f(z) + noise(z)
+        return r_fn(x)[0] > r_fn(y)[0]
+    return comparison_fn
+
+def create_reward_fn_1(f, noise, seed=None):
+    def reward_fn(x):
+        return (f(x) + noise(x))[0]
+    return reward_fn
+
+# Noise functions
+def gaussian_noise(x, sigma=0.1, seed=None):
+    np.random.seed(seed)
+    return np.random.normal(0, sigma, size=(1,))
+
+def step_noise(x, x_step=0.1, var_1=0.1, var_2=0.5, seed=None):
+    np.random.seed(seed)
+    if x <= x_step:
+        return np.random.normal(0, var_1, size=(1,))
+    else:
+        return np.random.normal(0, var_2, size=(1,))
+
+# Create comparison tensor dataset from sampled actions
 def create_comparisons(actions, comparison_fn):
     comparisons_x = []
     comparisons_y = []
@@ -62,7 +90,8 @@ def create_comparisons(actions, comparison_fn):
 # which one can sample actions and rewards from the policy
 def train_policy(r_fn, policy_cfg):
     # Create env with given reward function
-    register_fb_env(r_fn)
+    action_dim = policy_cfg['action_dim']
+    register_fb_env(r_fn, action_dim)
 
     if policy_cfg["verbose"]:
         verbose = 1
@@ -73,7 +102,7 @@ def train_policy(r_fn, policy_cfg):
     algo = policy_cfg["algo"]
     
 
-    print("Learning with PPO")
+    if verbose: print("Learning with PPO")
     env = make_vec_env("FeedbackEnv-v0", n_envs=1)
     if policy_cfg["log"]:
         model = PPO("MlpPolicy", env, verbose=verbose, tensorboard_log="./log/policy/"+policy_cfg["log"]+"/")
@@ -96,13 +125,12 @@ def train_policy(r_fn, policy_cfg):
             i += 1
             # env.render()
         rewardss = np.ndarray.flatten(np.array(rewardss))
-        return rewardss, [a.reshape(2,) for a in actions]
+        return rewardss, [a.reshape(action_dim,) for a in actions]
 
     return sample
 
 # Learns reward function minimize the cross entropy loss on comparison dataset
-def learn_reward(sample, comparison_fn, reward_cfg):
-    print("Learning with Cross Entropy")
+def learn_reward(sample, comparison_fn, reward_cfg, prev_comparisons=None):
     n_sample = reward_cfg['n_sample']
     n_epoch = reward_cfg['n_epoch']
     lr = reward_cfg['lr']
@@ -110,6 +138,9 @@ def learn_reward(sample, comparison_fn, reward_cfg):
     eval_freq = reward_cfg['eval_freq']
     batch_size = reward_cfg['batch_size']
     split = reward_cfg['split']
+    action_dim = reward_cfg['action_dim']
+
+    if verbose: print("Learning with Cross Entropy")
 
     if reward_cfg['log']:
         writer = SummaryWriter('./log/reward/'+reward_cfg['log'])
@@ -118,12 +149,14 @@ def learn_reward(sample, comparison_fn, reward_cfg):
     
     # Generate comparisons dataset
     comparisons_dataset = create_comparisons(actions, comparison_fn)
+    if prev_comparisons is not None:
+        comparisons_dataset = torch.utils.data.ConcatDataset([prev_comparisons, comparisons_dataset])
     train_set, val_set = torch.utils.data.random_split(comparisons_dataset, [int(split*len(comparisons_dataset)), len(comparisons_dataset)-int(split*len(comparisons_dataset))])
     trainloader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
     validationloader = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=True)
 
     # Create NN
-    mlp = MLP()
+    mlp = MLP(input_dim=action_dim)
     ce_loss = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(mlp.parameters(), lr=lr)
 
@@ -133,8 +166,8 @@ def learn_reward(sample, comparison_fn, reward_cfg):
         if verbose: print(f'Starting epoch {epoch+1}')
         for i, data in enumerate(trainloader, 0):
             inputs, targets = data
-            output_1 = mlp(inputs[:,0:2])
-            output_2 = mlp(inputs[:,2:])
+            output_1 = mlp(inputs[:,0:action_dim])
+            output_2 = mlp(inputs[:,action_dim:])
             output = torch.hstack([output_1, output_2])
             # print("inputs", inputs)
             # print("outputs", output)
@@ -152,8 +185,8 @@ def learn_reward(sample, comparison_fn, reward_cfg):
                 mlp.train(False) # Don't need to track gradents for validation
                 for j, vdata in enumerate(validationloader, 0):
                     vinputs, vlabels = vdata
-                    voutput_1 = mlp(vinputs[:,0:2])
-                    voutput_2 = mlp(vinputs[:,2:])
+                    voutput_1 = mlp(vinputs[:,0:action_dim])
+                    voutput_2 = mlp(vinputs[:,action_dim:])
                     voutput = torch.hstack([voutput_1, voutput_2])
                     vloss = ce_loss(voutput, vlabels)
                     running_vloss += vloss.item()
@@ -178,7 +211,7 @@ def learn_reward(sample, comparison_fn, reward_cfg):
 
     # Minimize loss
 
-    return lambda x: mlp(torch.tensor(np.array([x])).float()).detach().numpy()[0,0]
+    return lambda x: mlp(torch.tensor(np.array([x])).float()).detach().numpy()[0,0], comparisons_dataset
 
 ## Visualization
 
@@ -201,3 +234,51 @@ def visualize_fn(f, title, x_range=[0,1], y_range=[0,1], x_step=0.01, y_step=0.0
     plt.colorbar()
     plt.title(title)
     plt.show()
+
+# 1D Visualization
+def plot_sampler_1(sample, title, n=100, n_bins=100):
+    _, actions = sample(n)
+    x = [a[0] for a in actions]
+    plt.figure(figsize=(2,2))
+    plt.title(title)
+    plt.hist(x, bins=n_bins)
+    plt.show()
+    print(np.average(x),np.std(x))
+
+def visualize_fn_1(f, title, x_range=[0,1], x_step=0.01):
+    comp_fn = create_comparison_fn_1(f, noise = lambda x: [0])
+    xs = np.arange(x_range[0], x_range[1], x_step)
+    zs = np.array([[int(comp_fn([y],[x])) for x in xs] for y in xs])
+    plt.imshow(zs, extent=[x_range[0],x_range[1],x_range[0], x_range[1]], cmap=cm.jet, origin='lower')
+    plt.colorbar()
+    plt.title(title)
+    plt.show()
+
+def visualize_res_1(fs, samplers, n=100, n_bins=100, x_range=[0,1], x_step=0.01):
+    xs = np.arange(x_range[0], x_range[1], x_step)
+    T = len(fs.keys())
+    fig, axs = plt.subplots(T, 2)
+    plt.title("Comparison functions and policies")
+    for t in fs.keys():
+        f, sampler = fs[t], samplers[t]
+        _, actions = sampler(n)
+        actions = [a[0] for a in actions]
+        comp_fn = create_comparison_fn_1(f, noise = lambda x: [0])
+        zs = np.array([[int(comp_fn([y],[x])) for x in xs] for y in xs])
+        axs[t,0].imshow(zs, extent=[x_range[0],x_range[1],x_range[0], x_range[1]], cmap=cm.jet, origin='lower')
+        axs[t,0].colorbar()
+        axs[t,0].set_title(f'Action 2 >= Action 1 ? (t={t})')
+        axs[t,1].set_xlabel('Action 1')
+        axs[t,1].set_ylabel('Action 2')
+
+        axs[t,1].hist(actions, bins=n_bins)
+        avg, std = np.average(actions), np.std(actions)
+        axs[t,1].set_title(f'avg={avg}, std={std}')
+        axs[t,1].set_xlabel('Action')
+        axs[t,1].set_ylabel('Frequency')
+
+    for ax in axs.flat:
+        ax.label_outer()
+        
+    plt.show()
+    

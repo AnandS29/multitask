@@ -14,10 +14,10 @@ class MLP(nn.Module):
   '''
     Multilayer Perceptron.
   '''
-  def __init__(self):
+  def __init__(self, input_dim):
     super().__init__()
     self.layers = nn.Sequential(
-      nn.Linear(2, 5),
+      nn.Linear(input_dim, 5),
       nn.ReLU(),
       nn.Linear(5, 5),
       nn.ReLU(),
