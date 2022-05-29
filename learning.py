@@ -169,10 +169,6 @@ def learn_reward(sample, comparison_fn, reward_cfg, prev_comparisons=None):
             output_1 = mlp(inputs[:,0:action_dim])
             output_2 = mlp(inputs[:,action_dim:])
             output = torch.hstack([output_1, output_2])
-            # print("inputs", inputs)
-            # print("outputs", output)
-            # print("targets", targets)
-            # print()
             loss = ce_loss(output, targets)
             optimizer.zero_grad()
             loss.backward()
@@ -254,10 +250,10 @@ def visualize_fn_1(f, title, x_range=[0,1], x_step=0.01):
     plt.title(title)
     plt.show()
 
-def visualize_res_1(fs, samplers, n=100, n_bins=100, x_range=[0,1], x_step=0.01):
+def visualize_res_1(fs, samplers, n=100, n_bins=100, x_range=[0,1], x_step=0.01, figsize=(10,10), save=False, round=False):
     xs = np.arange(x_range[0], x_range[1], x_step)
     T = len(fs.keys())
-    fig, axs = plt.subplots(T, 2)
+    fig, axs = plt.subplots(T, 2, figsize=figsize)
     plt.title("Comparison functions and policies")
     for t in fs.keys():
         f, sampler = fs[t], samplers[t]
@@ -266,19 +262,23 @@ def visualize_res_1(fs, samplers, n=100, n_bins=100, x_range=[0,1], x_step=0.01)
         comp_fn = create_comparison_fn_1(f, noise = lambda x: [0])
         zs = np.array([[int(comp_fn([y],[x])) for x in xs] for y in xs])
         axs[t,0].imshow(zs, extent=[x_range[0],x_range[1],x_range[0], x_range[1]], cmap=cm.jet, origin='lower')
-        axs[t,0].colorbar()
-        axs[t,0].set_title(f'Action 2 >= Action 1 ? (t={t})')
-        axs[t,1].set_xlabel('Action 1')
-        axs[t,1].set_ylabel('Action 2')
+        # axs[t,0].colorbar()
+        axs[t,0].set_title(f't={t}')
+        axs[t,0].set_xlabel('Action 1')
+        axs[t,0].set_ylabel('Action 2')
 
         axs[t,1].hist(actions, bins=n_bins)
         avg, std = np.average(actions), np.std(actions)
+        if round:
+            avg, std = np.round(avg,round), np.round(std,round)
         axs[t,1].set_title(f'avg={avg}, std={std}')
         axs[t,1].set_xlabel('Action')
         axs[t,1].set_ylabel('Frequency')
 
-    for ax in axs.flat:
-        ax.label_outer()
-        
+    # for ax in axs.flat:
+    #     ax.label_outer()
+
     plt.show()
+
+    if save: plt.savefig(f'plots/{save}')
     
