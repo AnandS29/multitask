@@ -131,6 +131,8 @@ def train_policy(r_fn, policy_cfg):
 
 # Learns reward function minimize the cross entropy loss on comparison dataset
 def learn_reward(sample, comparison_fn, reward_cfg, prev_comparisons=None):
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
     n_sample = reward_cfg['n_sample']
     n_epoch = reward_cfg['n_epoch']
     lr = reward_cfg['lr']
@@ -139,6 +141,7 @@ def learn_reward(sample, comparison_fn, reward_cfg, prev_comparisons=None):
     batch_size = reward_cfg['batch_size']
     split = reward_cfg['split']
     action_dim = reward_cfg['action_dim']
+    layers = reward_cfg['layers']
 
     if verbose: print("Learning with Cross Entropy")
 
@@ -156,8 +159,8 @@ def learn_reward(sample, comparison_fn, reward_cfg, prev_comparisons=None):
     validationloader = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=True)
 
     # Create NN
-    mlp = MLP(input_dim=action_dim)
-    ce_loss = nn.CrossEntropyLoss()
+    mlp = MLP(input_dim=action_dim, layer_dims=layers).to(device)
+    ce_loss = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(mlp.parameters(), lr=lr)
 
     running_loss = 0.0
@@ -168,7 +171,7 @@ def learn_reward(sample, comparison_fn, reward_cfg, prev_comparisons=None):
             inputs, targets = data
             output_1 = mlp(inputs[:,0:action_dim])
             output_2 = mlp(inputs[:,action_dim:])
-            output = torch.hstack([output_1, output_2])
+            output = torch.hstack([output_1, output_2]).to(device)
             loss = ce_loss(output, targets)
             optimizer.zero_grad()
             loss.backward()
@@ -183,7 +186,7 @@ def learn_reward(sample, comparison_fn, reward_cfg, prev_comparisons=None):
                     vinputs, vlabels = vdata
                     voutput_1 = mlp(vinputs[:,0:action_dim])
                     voutput_2 = mlp(vinputs[:,action_dim:])
-                    voutput = torch.hstack([voutput_1, voutput_2])
+                    voutput = torch.hstack([voutput_1, voutput_2]).to(device)
                     vloss = ce_loss(voutput, vlabels)
                     running_vloss += vloss.item()
                 mlp.train(True) # Turn gradients back on for training
@@ -247,6 +250,13 @@ def visualize_fn_1(f, title, x_range=[0,1], x_step=0.01):
     zs = np.array([[int(comp_fn([y],[x])) for x in xs] for y in xs])
     plt.imshow(zs, extent=[x_range[0],x_range[1],x_range[0], x_range[1]], cmap=cm.jet, origin='lower')
     plt.colorbar()
+    plt.title(title)
+    plt.show()
+
+def plot_fn_1(f, title, x_range=[0,1], x_step=0.01):
+    xs = np.arange(x_range[0], x_range[1], x_step)
+    zs = np.array([f([x]) for x in xs])
+    plt.plot(xs, zs)
     plt.title(title)
     plt.show()
 
