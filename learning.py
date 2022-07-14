@@ -28,7 +28,7 @@ def create_comparison_fn(f, g, sigma_f=0.1, sigma_g=0.5, seed=None):
     def comparison_fn(x, y):
         eps_f, eps_g = np.random.normal(0, sigma_f, size=(1,)), np.random.normal(0, sigma_g, size=(1,))
         r_fn = lambda z: f(z) + eps_f + g(z) + eps_g
-        return r_fn(x)[0] > r_fn(y)[0]
+        return r_fn(x)[0] >= r_fn(y)[0]
     return comparison_fn
 
 def create_reward_fn(f, g, sigma_f=0.1, sigma_g=0.5, seed=None):
@@ -42,7 +42,7 @@ def create_reward_fn(f, g, sigma_f=0.1, sigma_g=0.5, seed=None):
 def create_comparison_fn_1(f, noise, seed=None):
     def comparison_fn(x, y):
         r_fn = lambda z: f(z) + noise(z)
-        return r_fn(x)[0] > r_fn(y)[0]
+        return r_fn(x)[0] >= r_fn(y)[0]
     return comparison_fn
 
 def create_reward_fn_1(f, noise, seed=None):
@@ -253,12 +253,14 @@ def visualize_fn_1(f, title, x_range=[0,1], x_step=0.01):
     plt.title(title)
     plt.show()
 
-def plot_fn_1(f, title, x_range=[0,1], x_step=0.01):
+def plot_fn_1(f, title, x_range=[0,1], x_step=0.01, save=False):
     xs = np.arange(x_range[0], x_range[1], x_step)
     zs = np.array([f([x]) for x in xs])
     plt.plot(xs, zs)
     plt.title(title)
     plt.show()
+    if save: plt.savefig(f'plots/{save}')
+
 
 def visualize_res_1(fs, samplers, n=100, n_bins=100, x_range=[0,1], x_step=0.01, figsize=(10,10), save=False, round=False):
     xs = np.arange(x_range[0], x_range[1], x_step)
